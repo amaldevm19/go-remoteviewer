@@ -1,12 +1,14 @@
 import {useState,useEffect} from 'react';
 import { Modal,Radio, RadioGroup,TextField, Button, Checkbox, FormControlLabel, FormControl, FormLabel, Select, MenuItem, Box  } from "@mui/material";
 import PageHeading from '../components/PageHeading';
+import AlertBox from '../components/AlertBox';
+import SNMPSubModal from '../components/SNMPSubModal';
 import { useNavigate} from 'react-router-dom';
 
 
-import {AddMonitor,GetMonitors,DeleteMonitor,StartSingleMonitoring, StopSingleMonitoring, GetSingleMonitorForEdit, UpdateMonitor, OpenCSVFile } from "../../wailsjs/go/main/Monitor"
+import {AddMonitor,GetMonitors,DeleteMonitor,StartSingleMonitoring, StopSingleMonitoring, GetSingleMonitorForEdit, UpdateMonitor, OpenCSVFile, TestPing, ToggleIsMonitoring } from "../../wailsjs/go/main/Monitor"
 
-import { useForm , Controller} from "react-hook-form";
+import { useForm , Controller, useWatch } from "react-hook-form";
 import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
@@ -33,6 +35,7 @@ function Monitor() {
   },[devices])
 
   const [open, setOpen] = useState(false);
+  const [openSnmpSubmodal, setOpenSnmpSubmodal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false); // State to determine edit mode
   const [dataForEdit, setDataForEdit] = useState({})
   const handleOpenForEdit = async(id) =>{ 
@@ -167,10 +170,12 @@ function Monitor() {
     setIsEditMode(false); 
 
   }
-  
+  const ip = useWatch({
+    control,
+    name: "ip", // Specify the field name to watch
+  });
   const handlePing = () => {
-    // Ping logic for the entered IP address
-    console.log("Ping test for IP address...");
+    TestPing(ip)
   };
 
   const handleSNMP = () => {
@@ -179,7 +184,6 @@ function Monitor() {
   };
 
   const handleDelete = (id) => {
-    console.log(id);
     DeleteMonitor(id)
   };
   const navigate = useNavigate();
@@ -190,6 +194,15 @@ function Monitor() {
 
   const handleOpenFile =(deviceName,type)=>{
     OpenCSVFile(deviceName + '_' + type + '.csv');
+  }
+
+  const toggleIsMonitoring = (id)=>{
+    ToggleIsMonitoring(id)
+  }
+  const handleSNMPVersionChange = (e)=>{
+    if(e.target.value == "v3"){
+      setOpenSnmpSubmodal(true)
+    }
   }
   
   // Styling for modal content
@@ -215,6 +228,8 @@ function Monitor() {
           Add New Device
         </Button>
       </div>
+      <AlertBox/>
+      <SNMPSubModal openSnmpSubmodal={openSnmpSubmodal} setOpenSnmpSubmodal ={setOpenSnmpSubmodal} modalStyle={modalStyle}/>
       <Modal open={open} onClose={handleClose}>
         <Box sx={modalStyle}>
         {/* Form to Add IP Device */}
@@ -377,6 +392,7 @@ function Monitor() {
                   fullWidth
                   defaultValue="v2c"
                   {...register("snmpVersion")}
+                  onChange={handleSNMPVersionChange}
                 >
                   <MenuItem value="v1">v1</MenuItem>
                   <MenuItem value="v2c">v2c</MenuItem>
@@ -484,6 +500,7 @@ function Monitor() {
                 <th className="px-4 py-2">Ping</th>
                 <th className="px-4 py-2">SNMP</th>
                 <th className="px-4 py-2">Monitor Status</th>
+                <th className="px-4 py-2">Enable / Disable</th>
                 <th className="px-4 py-2">View</th>
                 <th className="px-4 py-2">Open Ping Response</th>
                 <th className="px-4 py-2">Open SNMP Response</th>
@@ -512,7 +529,15 @@ function Monitor() {
                 />
               )}
             </td>
-                     {/* View: Eye Icon */}
+            <td className="px-4 py-2 ">
+              <Checkbox
+                  className="cursor-pointer text-red-600"
+                  checked={device.isMonitoringEnabled}
+                  onChange={async () => toggleIsMonitoring(device.id)}
+                />
+            </td>
+
+            {/* View: Eye Icon */}
             <td className="px-4 py-2">
               <EyeIcon
                 className="cursor-pointer text-blue-600"

@@ -38,6 +38,14 @@ export function StopSingleMonitoring(arg1) {
   return window['go']['main']['Monitor']['StopSingleMonitoring'](arg1);
 }
 
+export function TestPing(arg1) {
+  return window['go']['main']['Monitor']['TestPing'](arg1);
+}
+
+export function ToggleIsMonitoring(arg1) {
+  return window['go']['main']['Monitor']['ToggleIsMonitoring'](arg1);
+}
+
 export function UpdateMonitor(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22) {
   return window['go']['main']['Monitor']['UpdateMonitor'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, arg18, arg19, arg20, arg21, arg22);
 }

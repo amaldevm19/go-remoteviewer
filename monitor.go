@@ -92,6 +92,16 @@ type SNMPResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type PingTestResponse struct {
+	Message string
+	Status  bool
+}
+
+type SnmpTestResponse struct {
+	Message string
+	Status  bool
+}
+
 const (
 	NewMonitorContextKey MonitorContextKey = "DeviceKey"
 )
@@ -325,24 +335,36 @@ func (m *Monitor) StopAllMonitoring() {
 // Ping Monitoring Logic
 func (m *Monitor) startPingMonitoring(monitor Monitor, ctx context.Context) {
 	for {
+		stopped := false
 		select {
 		case <-ctx.Done():
-			fmt.Printf("Stopped pinging device %s at IP: %s\n", monitor.Name, monitor.IP)
-			runtime.EventsEmit(m.ctx, "PingStopped", "Ping monitoring has been stopped.")
+			stopped = true
+			message := fmt.Sprintf("Stopped pinging device %s at IP: %s\n", monitor.Name, monitor.IP)
+			runtime.LogErrorf(m.ctx, message)
+			m.savePingResponse(monitor, message, stopped)
+			runtime.EventsEmit(m.ctx, "response",
+				map[string]string{
+					"deviceId": monitor.Id,
+					"status":   "PingStopped",
+					"response": message,
+				})
 			return
 		default:
-			// Simulate getting a ping response
-			// pingResponse := fmt.Sprintf("Ping response from device %s at %v", monitor.Name, time.Now())
-			// Set up the ping command (adjust for your OS)
 			cmd := exec.Command("ping", monitor.IP, "-n", "1") // "-c 1" sends one packet (Linux/macOS)
 			stdout, err := cmd.StdoutPipe()
 
 			if err != nil {
-				runtime.LogErrorf(m.ctx, "Error starting ping command: %v", err)
+				stopped = true
+				message := fmt.Sprintf("Error starting ping command: %v", err)
+				runtime.LogErrorf(m.ctx, message)
+				m.savePingResponse(monitor, message, stopped)
 				return
 			}
 			if err := cmd.Start(); err != nil {
-				runtime.LogErrorf(m.ctx, "Error starting ping command: %v", err)
+				stopped = true
+				message := fmt.Sprintf("Error starting ping command: %v", err)
+				runtime.LogErrorf(m.ctx, message)
+				m.savePingResponse(monitor, message, stopped)
 				return
 			}
 
@@ -383,11 +405,14 @@ func (m *Monitor) startPingMonitoring(monitor Monitor, ctx context.Context) {
 			}
 
 			if err := cmd.Wait(); err != nil {
-				runtime.LogErrorf(m.ctx, "Ping command failed: %v", err)
+				stopped = true
+				message := fmt.Sprintf("Ping command failed: %v", err)
+				runtime.LogErrorf(m.ctx, message)
+				m.savePingResponse(monitor, message, stopped)
 			}
-			//fmt.Println()
-			m.saveResponse(monitor, "ping", completeResponse)
-			runtime.LogInfof(m.ctx, completeResponse)
+
+			m.savePingResponse(monitor, completeResponse, stopped)
+			//runtime.LogInfof(m.ctx, completeResponse)
 			time.Sleep(time.Duration(monitor.PingInterval) * time.Millisecond)
 		}
 	}
@@ -398,7 +423,7 @@ func (m *Monitor) startSNMPMonitoring(monitor Monitor, ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("Stopped SNMP monitoring for device %s at IP: %s\n", monitor.Name, monitor.IP)
+			runtime.LogErrorf(m.ctx, "Stopped SNMP monitoring for device %s at IP: %s\n", monitor.Name, monitor.IP)
 			if !monitor.SNMPSilent {
 				runtime.EventsEmit(m.ctx, "response",
 					map[string]string{
@@ -479,19 +504,31 @@ func (m *Monitor) performSNMPGet(monitor Monitor) (string, error) {
 }
 
 // Save response to DB or file
-func (m *Monitor) saveResponse(monitor Monitor, responseType string, completeResponse string) {
-	pingResult, err := parsePingResult(completeResponse, monitor.Name)
-	if err != nil {
-		fmt.Println(err)
-	}
-	if responseType == "ping" {
-		if monitor.SavePingResponse == "db" {
-			// Save Ping response to DB
-			m.savePingResponseToDb(pingResult, monitor)
-		} else if monitor.SavePingResponse == "file" {
-			// Save Ping response to file
-			savePingResponseToCSV(pingResult)
+func (m *Monitor) savePingResponse(monitor Monitor, completeResponse string, stopped bool) {
+	var pingResult PingResult
+	var err error
+	if !stopped {
+		pingResult, err = parsePingResult(completeResponse, monitor.Name, stopped)
+		if err != nil {
+			fmt.Println(err)
 		}
+	} else {
+		pingResult.DateTime = time.Now()
+		pingResult.DeviceName = monitor.Name
+		pingResult.IPAddress = monitor.IP
+		pingResult.PacketsLost = 0
+		pingResult.PacketsRecv = 0
+		pingResult.PacketsSent = 0
+		pingResult.ResponseTime = "0"
+		pingResult.Status = completeResponse
+	}
+
+	if monitor.SavePingResponse == "db" {
+		// Save Ping response to DB
+		m.savePingResponseToDb(pingResult, monitor)
+	} else if monitor.SavePingResponse == "file" {
+		// Save Ping response to file
+		m.savePingResponseToCSV(pingResult, pingResult.Status)
 	}
 }
 
@@ -554,7 +591,7 @@ func extractMultipleGroups(input string, patterns []string, expectedGroupCount i
 	return []string{}
 }
 
-func parsePingResult(pingResult string, deviceName string) (PingResult, error) {
+func parsePingResult(pingResult string, deviceName string, stopped bool) (PingResult, error) {
 	result := PingResult{
 		DateTime:   time.Now(),
 		DeviceName: deviceName,
@@ -579,11 +616,16 @@ func parsePingResult(pingResult string, deviceName string) (PingResult, error) {
 		result.PacketsSent, _ = strconv.Atoi(packetMatches[0])
 		result.PacketsRecv, _ = strconv.Atoi(packetMatches[1])
 		result.PacketsLost = result.PacketsSent - result.PacketsRecv
-		if result.PacketsLost == 0 {
-			result.Status = "Success"
+		if !stopped {
+			if result.PacketsLost == 0 {
+				result.Status = "Success"
+			} else {
+				result.Status = "Fail"
+			}
 		} else {
-			result.Status = "Fail"
+			result.Status = "Stopped"
 		}
+
 	}
 
 	// Response Time (Average)
@@ -596,7 +638,7 @@ func parsePingResult(pingResult string, deviceName string) (PingResult, error) {
 	return result, nil
 }
 
-func savePingResponseToCSV(pingResult PingResult) error {
+func (m *Monitor) savePingResponseToCSV(pingResult PingResult, status string) error {
 	// Create the file name based on device name and response type (ping/snmp)
 	fileName := fmt.Sprintf("%s_%s.csv", pingResult.DeviceName, "Ping")
 
@@ -624,7 +666,7 @@ func savePingResponseToCSV(pingResult PingResult) error {
 		pingResult.DateTime.Format("15:04:05"),
 		pingResult.DeviceName,
 		pingResult.IPAddress,
-		pingResult.Status,
+		status,
 		strconv.Itoa(pingResult.PacketsSent),
 		strconv.Itoa(pingResult.PacketsRecv),
 		strconv.Itoa(pingResult.PacketsLost),
@@ -759,4 +801,154 @@ func (m *Monitor) saveSNMPResponseToFile(monitor Monitor, value string, status s
 		return fmt.Errorf("error writing to CSV file: %v", err)
 	}
 	return nil
+}
+
+// Test Ping
+func (m *Monitor) TestPing(ip string) {
+	cmd := exec.Command("ping", ip, "-n", "1") // "-c 1" sends one packet (Linux/macOS)
+	var message PingTestResponse
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		message.Status = false
+		message.Message = fmt.Sprintf("Error starting ping command: %v", err)
+		runtime.LogErrorf(m.ctx, message.Message)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		message.Status = false
+		message.Message = fmt.Sprintf("Error starting ping command: %v", err)
+		runtime.LogErrorf(m.ctx, message.Message)
+		return
+	}
+	// Read the output of the ping command
+	scanner := bufio.NewScanner(stdout)
+	var response string
+	message.Status = false
+
+	for scanner.Scan() {
+		response = scanner.Text()
+		runtime.LogDebug(m.ctx, response)
+		// Check for success/failure based on command output
+		reply := fmt.Sprintf("Reply from %s:", ip)
+		if strings.Contains(response, reply) {
+			message.Status = true
+			message.Message = fmt.Sprintf("Ping Response from IP %s is Successful", ip)
+			break
+		}
+		if strings.Contains(response, "Packets: Sent = 1, Received = 0, Lost = 1 (100% loss)") || strings.Contains(response, "100% packet loss") {
+			message.Status = false
+			message.Message = fmt.Sprintf("100%% packet loss for %v", ip)
+		}
+		if strings.Contains(response, "Destination host unreachable") || strings.Contains(response, "Request timed out") {
+			message.Status = false
+			message.Message = fmt.Sprintf("%v Destination host is unreachable", ip)
+		}
+
+	}
+
+	if err := cmd.Wait(); err != nil {
+		message.Status = false
+		message.Message = fmt.Sprintf("Ping command failed: %v", err)
+		runtime.LogErrorf(m.ctx, message.Message)
+	}
+
+	runtime.LogDebug(m.ctx, fmt.Sprintf("%v", message))
+	runtime.EventsEmit(m.ctx, "PingTestResponse", message)
+}
+
+func (m *Monitor) ToggleIsMonitoring(id string) error {
+	var monitor Monitor
+
+	// Find the existing monitor record by ID
+	result := m.db.First(&monitor, "id = ?", id)
+	if result.Error != nil {
+		return result.Error // Return an error if the monitor is not found
+	}
+
+	monitor.IsMonitoringEnabled = !monitor.IsMonitoringEnabled
+	// Save the updated monitor record back to the database
+	if err := m.db.Save(&monitor).Error; err != nil {
+		return err // Return an error if saving fails
+	}
+
+	if monitor.IsMonitoringEnabled && monitor.IsMonitoring {
+		m.StartSingleMonitoring(id)
+	} else {
+		m.StopSingleMonitoring(id)
+	}
+	return nil // Return nil if the update is successful
+
+}
+
+// Function to perform SNMP Get request
+func (m *Monitor) performSNMPTest(monitor Monitor) {
+	var message SnmpTestResponse
+	var version gosnmp.SnmpVersion
+	switch monitor.SNMPVersion {
+	case "v1":
+		version = gosnmp.Version1
+		break
+	case "v2c":
+		version = gosnmp.Version2c
+		break
+	case "v3":
+		version = gosnmp.Version3
+	default:
+		version = gosnmp.Version2c
+		break
+	}
+	g := &gosnmp.GoSNMP{
+		Target:    monitor.IP,
+		Port:      uint16(monitor.SNMPPort),
+		Community: monitor.SNMPCommunity,
+		Version:   version, // Adjust based on monitor.SNMPVersion
+		Timeout:   time.Duration(2) * time.Second,
+		Retries:   1,
+	}
+	/*
+		// SNMP v3 specific settings
+		if version == gosnmp.Version3 {
+			g.SecurityModel = gosnmp.UserSecurityModel
+			g.MsgFlags = gosnmp.AuthPriv // Set as per required security level
+
+			// Security parameters for SNMP v3
+			g.SecurityParameters = &gosnmp.UsmSecurityParameters{
+				UserName:                 monitor.SNMPUser, // SNMP v3 username
+				AuthenticationProtocol:   gosnmp.SHA,       // or gosnmp.MD5
+				AuthenticationPassphrase: monitor.SNMPAuthPassphrase,
+				PrivacyProtocol:          gosnmp.AES,       // or gosnmp.DES
+				PrivacyPassphrase:        monitor.SNMPPrivPassphrase,
+			}
+		}
+	*/
+	err := g.Connect()
+	if err != nil {
+		message.Status = false
+		message.Message = fmt.Sprintf("error performing SNMP get: %v", err)
+	}
+	defer g.Conn.Close()
+
+	oids := []string{monitor.OID}
+	result, err := g.Get(oids)
+	if err != nil {
+		message.Status = false
+		message.Message = fmt.Sprintf("error performing SNMP get: %v", err)
+	}
+
+	for _, variable := range result.Variables {
+		// Handle the response based on the variable type
+
+		switch variable.Type {
+		case gosnmp.OctetString:
+			message.Status = true
+			message.Message = fmt.Sprintf("SNMP Response for %v is %v", monitor.OID, variable.Value.([]byte))
+		default:
+			message.Status = true
+			message.Message = fmt.Sprintf("SNMP Response for %v is %v", monitor.OID, variable.Value)
+		}
+
+	}
+	runtime.LogDebug(m.ctx, fmt.Sprintf("%v", message))
+	runtime.EventsEmit(m.ctx, "PingTestResponse", message)
+
 }

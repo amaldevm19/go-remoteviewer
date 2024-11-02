@@ -20,4 +20,8 @@ export function StopAllMonitoring():Promise<void>;
 
 export function StopSingleMonitoring(arg1:string):Promise<void>;
 
+export function TestPing(arg1:string):Promise<void>;
+
+export function ToggleIsMonitoring(arg1:string):Promise<void>;
+
 export function UpdateMonitor(arg1:string,arg2:string,arg3:string,arg4:boolean,arg5:number,arg6:number,arg7:number,arg8:string,arg9:boolean,arg10:boolean,arg11:boolean,arg12:number,arg13:string,arg14:number,arg15:string,arg16:number,arg17:string,arg18:string,arg19:boolean,arg20:boolean,arg21:boolean,arg22:boolean):Promise<void>;
